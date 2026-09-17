@@ -102,7 +102,7 @@ def kb_day_picker(year: int, month: int):
         row = []
         for day in week:
             if day == 0:
-                row.append(InlineKeyboardButton(" ", callback_data="noop"))
+                row.append(InlineKeyboardButton("·", callback_data="noop"))
             elif year == today.year and month == today.month and day > today.day:
                 row.append(InlineKeyboardButton(str(day), callback_data="future"))
             else:
