@@ -51,43 +51,56 @@ async def is_subscribed(bot, user_id: int) -> bool:
         return True
 
 
+def styled(title: str, body: str, emoji: str = "") -> str:
+    """Единый визуальный стиль для сообщений бота: заголовок + разделитель + текст."""
+    header = f"{emoji} *{title.upper()}*".strip()
+    return f"{header}\n✧┄┄┄┄┄┄┄┄┄┄┄┄✧\n\n{body}"
+
+
 def welcome_text() -> str:
-    return (
-        "🌙 *Добро пожаловать в Astro Dialog.*\n\n"
+    return styled(
+        "Astro Dialog",
         "Здесь вы получите персональный психологический профиль по дате рождения.\n\n"
-        "Это займет меньше минуты."
+        "Это займёт меньше минуты.",
+        "🌙",
     )
 
 
 def subscribe_text() -> str:
-    return (
-        "✨ *Ваш астрологический профиль почти готов.*\n\n"
+    return styled(
+        "Профиль почти готов",
         "Остался один шаг — подпишитесь на канал «Астрологический Диалог», "
         "где ежедневно выходят новые психологические разборы знаков, "
         "интервью с персонажами и короткие видео.\n\n"
-        "После подписки нажмите кнопку ниже."
+        "После подписки нажмите кнопку ниже.",
+        "✨",
+    )
+
+
+def gender_text() -> str:
+    return styled("Выберите пол", "Это нужно, чтобы подобрать вашего персонажа для карточки.", "👤")
+
+
+def date_text() -> str:
+    return styled("Дата рождения", "Укажите дату рождения — например `24.09.1997`", "📅")
+
+
+def city_text() -> str:
+    return styled(
+        "Город рождения",
+        "Введите город, в котором вы родились, или нажмите кнопку ниже, если пропускаете.",
+        "📍",
     )
 
 
 def profile_ready_caption(type_data: dict) -> str:
-    lines = ["✨ Ваш астрологический профиль готов."]
-    if type_data.get("quote"):
-        lines.append(f"\n«{type_data['quote']}»")
-    return "\n".join(lines)
+    quote = f"«{type_data['quote']}»" if type_data.get("quote") else "Ваш психологический профиль готов."
+    return styled("Ваш профиль готов", quote, "✨")
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db.upsert_user(user.id, username=user.username)
-
-    if context.args:
-        arg = context.args[0]
-        if arg.startswith("ref_"):
-            try:
-                inviter_id = int(arg.removeprefix("ref_"))
-                db.add_referral(inviter_id, user.id)
-            except ValueError:
-                pass
 
     await update.message.reply_text(
         welcome_text(), reply_markup=kb.kb_start(), parse_mode=ParseMode.MARKDOWN
@@ -100,7 +113,9 @@ async def on_start_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
 
     if await is_subscribed(context.bot, user_id):
-        await query.edit_message_text("Выберите пол.", reply_markup=kb.kb_gender())
+        await query.edit_message_text(
+            gender_text(), reply_markup=kb.kb_gender(), parse_mode=ParseMode.MARKDOWN
+        )
     else:
         await query.edit_message_text(
             subscribe_text(), reply_markup=kb.kb_subscribe(), parse_mode=ParseMode.MARKDOWN
@@ -113,7 +128,9 @@ async def on_check_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if await is_subscribed(context.bot, user_id):
         await query.answer("Подписка подтверждена ✅")
-        await query.edit_message_text("Выберите пол.", reply_markup=kb.kb_gender())
+        await query.edit_message_text(
+            gender_text(), reply_markup=kb.kb_gender(), parse_mode=ParseMode.MARKDOWN
+        )
     else:
         await query.answer(
             "Пока не вижу подписку. Подпишитесь и попробуйте снова.", show_alert=True
@@ -128,7 +145,7 @@ async def on_gender_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db.upsert_user(query.from_user.id, gender=gender)
 
     await query.edit_message_text(
-        "Укажите дату рождения.\n\nНапример: `24.09.1997`",
+        date_text(),
         parse_mode=ParseMode.MARKDOWN,
     )
     return BIRTH_DATE
@@ -139,7 +156,7 @@ async def on_birth_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
     match = DATE_RE.match(text)
     if not match:
         await update.message.reply_text(
-            "Не получилось распознать дату 🙈\n\nВведите в формате `ДД.ММ.ГГГГ`, например `24.09.1997`.",
+            styled("Не расслышал дату", "Введите в формате `ДД.ММ.ГГГГ` — например `24.09.1997`.", "🙈"),
             parse_mode=ParseMode.MARKDOWN,
         )
         return BIRTH_DATE
@@ -152,18 +169,23 @@ async def on_birth_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
         birth_dt = datetime(year, month, day)
     except ValueError:
         await update.message.reply_text(
-            "Такой даты не существует. Проверьте число и месяц и введите еще раз."
+            styled("Такой даты нет", "Проверьте число и месяц и введите ещё раз.", "⚠️"),
+            parse_mode=ParseMode.MARKDOWN,
         )
         return BIRTH_DATE
 
     if birth_dt > datetime.now():
-        await update.message.reply_text("Дата рождения не может быть в будущем 🙂 Введите еще раз.")
+        await update.message.reply_text(
+            styled("Ещё не наступило", "Дата рождения не может быть в будущем — введите ещё раз.", "⏳"),
+            parse_mode=ParseMode.MARKDOWN,
+        )
         return BIRTH_DATE
 
     zodiac_key = get_zodiac_by_date(day, month)
     if zodiac_key is None:
         await update.message.reply_text(
-            "Не получилось определить знак по этой дате. Проверьте дату и введите еще раз."
+            styled("Не определили знак", "Проверьте дату и введите ещё раз.", "⚠️"),
+            parse_mode=ParseMode.MARKDOWN,
         )
         return BIRTH_DATE
 
@@ -181,10 +203,13 @@ async def on_birth_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     sign = ZODIAC[zodiac_key]
     await update.message.reply_text(
-        f"{sign['emoji']} Вижу, вы {sign['name_gen']} по знаку.\n\n"
-        "Хотите сделать профиль точнее? Введите время рождения (например `14:30`) "
-        "или нажмите «Не знаю время».",
+        f"{sign['emoji']} *ВЫ — {sign['name'].upper()}*\n"
+        "✧┄┄┄┄┄┄┄┄┄┄┄┄✧\n\n"
+        "Хотите сделать профиль точнее?\n\n"
+        "🕐 Введите время рождения — например `14:30`\n"
+        "или нажмите кнопку ниже, если не знаете.",
         reply_markup=kb.kb_skip_time(),
+        parse_mode=ParseMode.MARKDOWN,
     )
     return BIRTH_TIME
 
@@ -194,8 +219,11 @@ async def on_birth_time_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
     match = TIME_RE.match(text)
     if not match or not (0 <= int(match.group(1)) <= 23) or not (0 <= int(match.group(2)) <= 59):
         await update.message.reply_text(
-            "Не получилось распознать время. Введите в формате `ЧЧ:ММ`, например `14:30`, "
-            "или нажмите «Не знаю время».",
+            styled(
+                "Не расслышал время",
+                "Введите в формате `ЧЧ:ММ` — например `14:30`, или нажмите «Не знаю время».",
+                "🙈",
+            ),
             reply_markup=kb.kb_skip_time(),
             parse_mode=ParseMode.MARKDOWN,
         )
@@ -204,8 +232,7 @@ async def on_birth_time_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data["birth_time"] = text
     db.upsert_user(update.effective_user.id, birth_time=text)
     await update.message.reply_text(
-        "В каком городе вы родились? Или нажмите «Пропустить».",
-        reply_markup=kb.kb_skip_city(),
+        city_text(), reply_markup=kb.kb_skip_city(), parse_mode=ParseMode.MARKDOWN
     )
     return BIRTH_CITY
 
@@ -215,8 +242,7 @@ async def on_skip_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     context.user_data["birth_time"] = None
     await query.edit_message_text(
-        "В каком городе вы родились? Или нажмите «Пропустить».",
-        reply_markup=kb.kb_skip_city(),
+        city_text(), reply_markup=kb.kb_skip_city(), parse_mode=ParseMode.MARKDOWN
     )
     return BIRTH_CITY
 
@@ -245,14 +271,14 @@ async def run_analysis_and_send_card(message, context, user_id: int, edit: bool 
         "Создаем профиль...\n▓▓▓▓▓▓▓▓▓▓",
     ]
     if edit:
-        msg = await message.edit_text(steps[0])
+        msg = await message.edit_text(styled("Анализ", steps[0], "🔮"), parse_mode=ParseMode.MARKDOWN)
     else:
-        msg = await message.reply_text(steps[0])
+        msg = await message.reply_text(styled("Анализ", steps[0], "🔮"), parse_mode=ParseMode.MARKDOWN)
 
     for step_text in steps[1:]:
         await asyncio.sleep(0.9)
         try:
-            await msg.edit_text(step_text)
+            await msg.edit_text(styled("Анализ", step_text, "🔮"), parse_mode=ParseMode.MARKDOWN)
         except BadRequest:
             pass
 
@@ -297,13 +323,13 @@ async def on_share(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     bot_username = config.BOT_USERNAME or (await context.bot.get_me()).username
-    link = f"https://t.me/{bot_username}?start=ref_{query.from_user.id}"
-    referrals = db.count_referrals(query.from_user.id)
+    link = f"https://t.me/{bot_username}"
 
     text = (
+        "📤 *ПОДЕЛИТЬСЯ*\n"
+        "✧┄┄┄┄┄┄┄┄┄┄┄┄✧\n\n"
         "Понравился профиль? Отправьте бота другу — пусть сравнит результат со своим 🌙\n\n"
-        f"Ваша персональная ссылка:\n`{link}`\n\n"
-        f"По ней уже пришли: *{referrals}* чел."
+        f"{link}"
     )
     await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
 
@@ -311,12 +337,15 @@ async def on_share(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def on_restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await query.message.reply_text("Выберите пол.", reply_markup=kb.kb_gender())
+    await query.message.reply_text(
+        gender_text(), reply_markup=kb.kb_gender(), parse_mode=ParseMode.MARKDOWN
+    )
 
 
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Хорошо, остановились. Когда будете готовы — нажмите /start."
+        styled("Остановлено", "Когда будете готовы — нажмите /start.", "🌙"),
+        parse_mode=ParseMode.MARKDOWN,
     )
     return ConversationHandler.END
 
