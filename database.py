@@ -10,7 +10,6 @@ from typing import Optional
 
 _lock = threading.Lock()
 _users: dict[int, dict] = {}
-_referrals: dict[int, set[int]] = {}
 
 
 def init_db():
@@ -36,7 +35,6 @@ def upsert_user(user_id: int, username: Optional[str] = None, **fields):
                 "birth_city": None,
                 "zodiac": None,
                 "type_id": None,
-                "referred_by": None,
                 "profiles_created": 0,
                 "created_at": _now(),
                 "updated_at": _now(),
@@ -58,19 +56,3 @@ def increment_profiles_created(user_id: int):
     with _lock:
         if user_id in _users:
             _users[user_id]["profiles_created"] += 1
-
-
-def add_referral(inviter_id: int, invited_id: int):
-    if inviter_id == invited_id:
-        return
-    with _lock:
-        invited = _referrals.setdefault(inviter_id, set())
-        invited.add(invited_id)
-        user = _users.get(invited_id)
-        if user is not None and user.get("referred_by") is None:
-            user["referred_by"] = inviter_id
-
-
-def count_referrals(inviter_id: int) -> int:
-    with _lock:
-        return len(_referrals.get(inviter_id, ()))
