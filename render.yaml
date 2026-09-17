@@ -1,0 +1,30 @@
+# Render Blueprint — позволяет развернуть бота одной кнопкой ("New +" -> "Blueprint")
+# либо просто ориентир для ручной настройки Web Service в панели Render.
+#
+# Важно: значения BOT_TOKEN / CHANNEL_USERNAME / CHANNEL_URL / BOT_USERNAME
+# нужно будет заполнить в панели Render после создания сервиса (sync: false
+# означает "спросить значение при деплое", секреты в этот файл не пишем).
+
+services:
+  - type: web
+    name: astro-dialog-bot
+    runtime: python
+    plan: free
+    region: frankfurt
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    healthCheckPath: /
+    envVars:
+      - key: RUN_MODE
+        value: webhook
+      - key: BOT_TOKEN
+        sync: false
+      - key: CHANNEL_USERNAME
+        sync: false
+      - key: CHANNEL_URL
+        sync: false
+      - key: BOT_USERNAME
+        sync: false
+      - key: PYTHON_VERSION
+        value: 3.12.3
