@@ -16,7 +16,13 @@ BASE_DIR = Path(__file__).resolve().parent
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 
-CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "@astrologicheskiy_dialog")
+CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "@astrologicheskiy_dialog").strip()
+# Автоматически добавляем "@", если его забыли указать в переменных окружения —
+# частая причина, по которой проверка подписки молча не работает. Числовой
+# chat_id (например "-1001234567890" для приватных каналов) не трогаем.
+if CHANNEL_USERNAME and not CHANNEL_USERNAME.startswith("@") and not CHANNEL_USERNAME.lstrip("-").isdigit():
+    CHANNEL_USERNAME = f"@{CHANNEL_USERNAME}"
+
 CHANNEL_URL = os.getenv("CHANNEL_URL", f"https://t.me/{CHANNEL_USERNAME.lstrip('@')}")
 
 BOT_USERNAME = os.getenv("BOT_USERNAME", "")

@@ -7,9 +7,7 @@ Astro Dialog Bot — основной файл.
 """
 import asyncio
 import logging
-import re
 import signal
-from datetime import datetime
 
 from telegram import Update
 from telegram.constants import ChatAction, ParseMode
@@ -36,10 +34,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("astro_dialog_bot")
 
-BIRTH_DATE, BIRTH_TIME, BIRTH_CITY = range(3)
-
-DATE_RE = re.compile(r"^(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{2,4})$")
-TIME_RE = re.compile(r"^(\d{1,2}):(\d{2})$")
+PICK_YEAR, PICK_MONTH, PICK_DAY, PICK_HOUR, PICK_MINUTE, BIRTH_CITY = range(6)
 
 
 async def is_subscribed(bot, user_id: int) -> bool:
@@ -47,7 +42,13 @@ async def is_subscribed(bot, user_id: int) -> bool:
         member = await bot.get_chat_member(config.CHANNEL_USERNAME, user_id)
         return member.status in ("member", "administrator", "creator")
     except (BadRequest, Forbidden) as e:
-        logger.warning("Не удалось проверить подписку: %s", e)
+        logger.error(
+            "ПРОВЕРКА ПОДПИСКИ ПРОПУЩЕНА для user_id=%s: не удалось обратиться к каналу %r (%s). "
+            "Скорее всего CHANNEL_USERNAME в переменных окружения не совпадает с реальным username "
+            "канала, либо бот не добавлен туда администратором. Пока это не исправлено, все "
+            "пользователи проходят дальше без проверки.",
+            user_id, config.CHANNEL_USERNAME, e,
+        )
         return True
 
 
@@ -81,8 +82,12 @@ def gender_text() -> str:
     return styled("Выберите пол", "Это нужно, чтобы подобрать вашего персонажа для карточки.", "👤")
 
 
-def date_text() -> str:
-    return styled("Дата рождения", "Укажите дату рождения — например `24.09.1997`", "📅")
+def date_step_text(title: str, body: str) -> str:
+    return styled(title, body, "📅")
+
+
+def time_step_text(title: str, body: str) -> str:
+    return styled(title, body, "🕐")
 
 
 def city_text() -> str:
@@ -145,56 +150,104 @@ async def on_gender_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db.upsert_user(query.from_user.id, gender=gender)
 
     await query.edit_message_text(
-        date_text(),
+        date_step_text("Год рождения", "Выберите год рождения."),
+        reply_markup=kb.kb_year_picker(0),
         parse_mode=ParseMode.MARKDOWN,
     )
-    return BIRTH_DATE
+    return PICK_YEAR
 
 
-async def on_birth_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-    match = DATE_RE.match(text)
-    if not match:
-        await update.message.reply_text(
-            styled("Не расслышал дату", "Введите в формате `ДД.ММ.ГГГГ` — например `24.09.1997`.", "🙈"),
-            parse_mode=ParseMode.MARKDOWN,
-        )
-        return BIRTH_DATE
+async def on_year_page(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    page = int(query.data.split(":")[1])
+    context.user_data["year_page"] = page
+    await query.edit_message_text(
+        date_step_text("Год рождения", "Выберите год рождения."),
+        reply_markup=kb.kb_year_picker(page),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return PICK_YEAR
 
-    day, month, year = int(match.group(1)), int(match.group(2)), int(match.group(3))
-    if year < 100:
-        year += 1900 if year > 25 else 2000
 
-    try:
-        birth_dt = datetime(year, month, day)
-    except ValueError:
-        await update.message.reply_text(
-            styled("Такой даты нет", "Проверьте число и месяц и введите ещё раз.", "⚠️"),
-            parse_mode=ParseMode.MARKDOWN,
-        )
-        return BIRTH_DATE
+async def on_year_picked(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    year = int(query.data.split(":")[1])
+    context.user_data["picker_year"] = year
+    await query.edit_message_text(
+        date_step_text("Месяц рождения", f"Год: {year}. Теперь выберите месяц."),
+        reply_markup=kb.kb_month_picker(year),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return PICK_MONTH
 
-    if birth_dt > datetime.now():
-        await update.message.reply_text(
-            styled("Ещё не наступило", "Дата рождения не может быть в будущем — введите ещё раз.", "⏳"),
-            parse_mode=ParseMode.MARKDOWN,
-        )
-        return BIRTH_DATE
+
+async def on_back_to_year(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    page = context.user_data.get("year_page", 0)
+    await query.edit_message_text(
+        date_step_text("Год рождения", "Выберите год рождения."),
+        reply_markup=kb.kb_year_picker(page),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return PICK_YEAR
+
+
+async def on_month_picked(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    month = int(query.data.split(":")[1])
+    year = context.user_data["picker_year"]
+    context.user_data["picker_month"] = month
+    await query.edit_message_text(
+        date_step_text("День рождения", f"{kb.MONTHS_RU[month - 1]} {year}. Теперь выберите день."),
+        reply_markup=kb.kb_day_picker(year, month),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return PICK_DAY
+
+
+async def on_back_to_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    year = context.user_data["picker_year"]
+    await query.edit_message_text(
+        date_step_text("Месяц рождения", f"Год: {year}. Теперь выберите месяц."),
+        reply_markup=kb.kb_month_picker(year),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return PICK_MONTH
+
+
+async def on_noop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Клетки-заглушки в календаре (шапка дней недели, пустые ячейки, недоступные месяцы)."""
+    await update.callback_query.answer()
+
+
+async def on_future_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer("Эта дата ещё не наступила 🙂", show_alert=True)
+
+
+async def on_day_picked(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    day = int(query.data.split(":")[1])
+    year = context.user_data["picker_year"]
+    month = context.user_data["picker_month"]
 
     zodiac_key = get_zodiac_by_date(day, month)
     if zodiac_key is None:
-        await update.message.reply_text(
-            styled("Не определили знак", "Проверьте дату и введите ещё раз.", "⚠️"),
-            parse_mode=ParseMode.MARKDOWN,
-        )
-        return BIRTH_DATE
+        await query.answer("Не получилось определить знак. Попробуйте другую дату.", show_alert=True)
+        return PICK_DAY
 
     context.user_data["birth_date"] = f"{day:02d}.{month:02d}.{year}"
     context.user_data["birth_day"] = day
     context.user_data["birth_month"] = month
     context.user_data["zodiac"] = zodiac_key
     db.upsert_user(
-        update.effective_user.id,
+        query.from_user.id,
         birth_date=context.user_data["birth_date"],
         birth_day=day,
         birth_month=month,
@@ -202,36 +255,51 @@ async def on_birth_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     sign = ZODIAC[zodiac_key]
-    await update.message.reply_text(
+    await query.edit_message_text(
         f"{sign['emoji']} *ВЫ — {sign['name'].upper()}*\n"
         "✧┄┄┄┄┄┄┄┄┄┄┄┄✧\n\n"
         "Хотите сделать профиль точнее?\n\n"
-        "🕐 Введите время рождения — например `14:30`\n"
-        "или нажмите кнопку ниже, если не знаете.",
-        reply_markup=kb.kb_skip_time(),
+        "🕐 Выберите час рождения\n"
+        "или нажмите «Не знаю время» ниже.",
+        reply_markup=kb.kb_hour_picker(),
         parse_mode=ParseMode.MARKDOWN,
     )
-    return BIRTH_TIME
+    return PICK_HOUR
 
 
-async def on_birth_time_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-    match = TIME_RE.match(text)
-    if not match or not (0 <= int(match.group(1)) <= 23) or not (0 <= int(match.group(2)) <= 59):
-        await update.message.reply_text(
-            styled(
-                "Не расслышал время",
-                "Введите в формате `ЧЧ:ММ` — например `14:30`, или нажмите «Не знаю время».",
-                "🙈",
-            ),
-            reply_markup=kb.kb_skip_time(),
-            parse_mode=ParseMode.MARKDOWN,
-        )
-        return BIRTH_TIME
+async def on_hour_picked(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    hour = int(query.data.split(":")[1])
+    context.user_data["picker_hour"] = hour
+    await query.edit_message_text(
+        time_step_text("Минуты рождения", f"Час: {hour:02d}. Теперь выберите минуты."),
+        reply_markup=kb.kb_minute_picker(hour),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return PICK_MINUTE
 
+
+async def on_back_to_hour(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        time_step_text("Час рождения", "Выберите час рождения."),
+        reply_markup=kb.kb_hour_picker(),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return PICK_HOUR
+
+
+async def on_minute_picked(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    minute = int(query.data.split(":")[1])
+    hour = context.user_data["picker_hour"]
+    text = f"{hour:02d}:{minute:02d}"
     context.user_data["birth_time"] = text
-    db.upsert_user(update.effective_user.id, birth_time=text)
-    await update.message.reply_text(
+    db.upsert_user(query.from_user.id, birth_time=text)
+    await query.edit_message_text(
         city_text(), reply_markup=kb.kb_skip_city(), parse_mode=ParseMode.MARKDOWN
     )
     return BIRTH_CITY
@@ -294,9 +362,11 @@ async def run_analysis_and_send_card(message, context, user_id: int, edit: bool 
 
     hour = minute = None
     if birth_time:
-        time_match = TIME_RE.match(birth_time)
-        if time_match:
-            hour, minute = int(time_match.group(1)), int(time_match.group(2))
+        try:
+            h_str, m_str = birth_time.split(":")
+            hour, minute = int(h_str), int(m_str)
+        except (ValueError, AttributeError):
+            pass
 
     type_data = get_profile_type(zodiac_key, month=birth_month, day=birth_day, hour=hour, minute=minute)
     db.upsert_user(user_id, zodiac=zodiac_key, gender=gender, type_id=type_data["id"])
@@ -354,17 +424,52 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error("Ошибка при обработке апдейта %s: %s", update, context.error, exc_info=context.error)
 
 
+async def _post_init(application: Application) -> None:
+    """Проверяет при старте, что канал для подписки вообще найден — чтобы
+    ошибка конфигурации (неверный CHANNEL_USERNAME, бот не админ канала)
+    была сразу видна в логах, а не терялась среди сообщений пользователей."""
+    try:
+        chat = await application.bot.get_chat(config.CHANNEL_USERNAME)
+        logger.info("✅ Канал для проверки подписки найден: %s (%s)", chat.title, config.CHANNEL_USERNAME)
+    except Exception as e:
+        logger.error(
+            "❌ КАНАЛ %r НЕ НАЙДЕН — проверка подписки будет пропускаться для ВСЕХ пользователей, "
+            "пока это не исправлено. Проверьте: 1) переменная CHANNEL_USERNAME в настройках хостинга "
+            "точно совпадает с username канала (с собакой @); 2) бот добавлен в канал администратором. "
+            "Ошибка: %s",
+            config.CHANNEL_USERNAME, e,
+        )
+
+
 def build_application() -> Application:
     db.init_db()
-    application = ApplicationBuilder().token(config.BOT_TOKEN).build()
+    application = ApplicationBuilder().token(config.BOT_TOKEN).post_init(_post_init).build()
 
     conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(on_gender_chosen, pattern="^gender_(male|female)$")],
         states={
-            BIRTH_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, on_birth_date)],
-            BIRTH_TIME: [
+            PICK_YEAR: [
+                CallbackQueryHandler(on_year_page, pattern="^yrpage:"),
+                CallbackQueryHandler(on_year_picked, pattern="^yr:"),
+            ],
+            PICK_MONTH: [
+                CallbackQueryHandler(on_back_to_year, pattern="^back_yr$"),
+                CallbackQueryHandler(on_noop, pattern="^noop$"),
+                CallbackQueryHandler(on_month_picked, pattern="^mo:"),
+            ],
+            PICK_DAY: [
+                CallbackQueryHandler(on_back_to_month, pattern="^back_mo$"),
+                CallbackQueryHandler(on_noop, pattern="^noop$"),
+                CallbackQueryHandler(on_future_day, pattern="^future$"),
+                CallbackQueryHandler(on_day_picked, pattern="^dy:"),
+            ],
+            PICK_HOUR: [
                 CallbackQueryHandler(on_skip_time, pattern="^skip_time$"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, on_birth_time_text),
+                CallbackQueryHandler(on_hour_picked, pattern="^hr:"),
+            ],
+            PICK_MINUTE: [
+                CallbackQueryHandler(on_back_to_hour, pattern="^back_hr$"),
+                CallbackQueryHandler(on_minute_picked, pattern="^mi:"),
             ],
             BIRTH_CITY: [
                 CallbackQueryHandler(on_skip_city, pattern="^skip_city$"),
@@ -393,6 +498,8 @@ async def _run_webhook_server():
 
     application = build_application()
     await application.initialize()
+    await _post_init(application)  # initialize() не вызывает post_init сам — это делают только
+                                    # встроенные run_polling/run_webhook, которыми мы тут не пользуемся.
     await application.start()
 
     webhook_url = f"{config.WEBHOOK_URL.rstrip('/')}/{config.WEBHOOK_PATH}"
