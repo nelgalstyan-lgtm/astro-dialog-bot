@@ -493,6 +493,9 @@ def build_application() -> Application:
     return application
 
 
+_background_tasks: set = set()
+
+
 async def _run_webhook_server():
     from aiohttp import web
 
@@ -503,13 +506,22 @@ async def _run_webhook_server():
     await application.start()
 
     webhook_url = f"{config.WEBHOOK_URL.rstrip('/')}/{config.WEBHOOK_PATH}"
-    await application.bot.set_webhook(
-        url=webhook_url,
-        secret_token=config.WEBHOOK_SECRET or None,
-        allowed_updates=Update.ALL_TYPES,
-        drop_pending_updates=True,
-    )
-    logger.info("Webhook зарегистрирован в Telegram: %s", webhook_url)
+    # Важно: НЕ сбрасываем накопившиеся апдейты (drop_pending_updates).
+    # На бесплатном Render сервис засыпает, и его будит как раз сообщение
+    # пользователя. Если при старте выкидывать очередь, это самое сообщение
+    # теряется — и человеку кажется, что бот не отвечает.
+    info = await application.bot.get_webhook_info()
+    if info.url != webhook_url:
+        await application.bot.set_webhook(
+            url=webhook_url,
+            secret_token=config.WEBHOOK_SECRET or None,
+            allowed_updates=Update.ALL_TYPES,
+        )
+        logger.info("Webhook зарегистрирован в Telegram: %s", webhook_url)
+    else:
+        logger.info("Webhook уже актуален (в очереди %s апдейтов)", info.pending_update_count)
+        if info.last_error_message:
+            logger.warning("Последняя ошибка вебхука по данным Telegram: %s", info.last_error_message)
 
     async def handle_webhook(request: "web.Request") -> "web.Response":
         if config.WEBHOOK_SECRET:
@@ -521,7 +533,12 @@ async def _run_webhook_server():
         except Exception:
             return web.Response(status=400, text="bad request")
         update = Update.de_json(data, application.bot)
-        await application.process_update(update)
+        # Отвечаем Telegram сразу, а обработку (генерация карточки и т.п.)
+        # ведем в фоне: иначе долгий ответ дает таймаут, Telegram повторяет
+        # апдейт и бот то молчит, то дублирует сообщения.
+        task = asyncio.create_task(application.process_update(update))
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
         return web.Response(status=200, text="ok")
 
     async def handle_health(request: "web.Request") -> "web.Response":
